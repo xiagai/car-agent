@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+aiofiles
+websockets
+openai
+mem0ai
+sounddevice
+numpy
+httpx
+python-dotenv

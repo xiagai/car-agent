@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#0f0f0f">
+  <title>车载助手</title>
+  <link rel="manifest" href="/static/manifest.json">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif;
+      background: #0f0f0f;
+      color: #f0f0f0;
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* 顶部状态栏 */
+    #status-bar {
+      padding: 12px 20px 8px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: #888;
+      flex-shrink: 0;
+    }
+    #status-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: #444;
+      transition: background 0.3s;
+    }
+    #status-dot.connected { background: #4caf50; }
+    #status-dot.listening { background: #ff9800; box-shadow: 0 0 8px #ff9800; }
+
+    /* 对话区 */
+    #messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    #messages::-webkit-scrollbar { display: none; }
+
+    .msg {
+      max-width: 80%;
+      padding: 10px 14px;
+      border-radius: 18px;
+      font-size: 15px;
+      line-height: 1.5;
+      word-break: break-word;
+    }
+    .msg.user {
+      align-self: flex-end;
+      background: #1a73e8;
+      color: #fff;
+      border-bottom-right-radius: 4px;
+    }
+    .msg.assistant {
+      align-self: flex-start;
+      background: #1e1e1e;
+      color: #f0f0f0;
+      border-bottom-left-radius: 4px;
+    }
+    .msg.assistant.streaming::after {
+      content: '▋';
+      animation: blink 0.8s step-end infinite;
+    }
+    @keyframes blink { 50% { opacity: 0; } }
+
+    /* 底部控制区 */
+    #controls {
+      padding: 16px 20px 32px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+      flex-shrink: 0;
+    }
+
+    /* 文字输入行 */
+    #input-row {
+      display: flex;
+      width: 100%;
+      gap: 10px;
+    }
+    #text-input {
+      flex: 1;
+      background: #1e1e1e;
+      border: 1px solid #333;
+      border-radius: 22px;
+      padding: 10px 16px;
+      font-size: 15px;
+      color: #f0f0f0;
+      outline: none;
+    }
+    #text-input::placeholder { color: #555; }
+    #send-btn {
+      width: 44px; height: 44px;
+      border-radius: 50%;
+      background: #1a73e8;
+      border: none;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+      transition: background 0.2s;
+    }
+    #send-btn:disabled { background: #333; }
+    #send-btn svg { fill: #fff; width: 18px; height: 18px; }
+
+    /* 按住说话按钮 */
+    #mic-btn {
+      width: 72px; height: 72px;
+      border-radius: 50%;
+      background: #1e1e1e;
+      border: 2px solid #333;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: all 0.15s;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: none;
+    }
+    #mic-btn.active {
+      background: #ff4444;
+      border-color: #ff4444;
+      box-shadow: 0 0 24px rgba(255,68,68,0.5);
+      transform: scale(1.08);
+    }
+    #mic-btn svg { fill: #888; width: 28px; height: 28px; transition: fill 0.15s; }
+    #mic-btn.active svg { fill: #fff; }
+    #mic-label {
+      font-size: 12px;
+      color: #555;
+    }
+  </style>
+</head>
+<body>
+
+<div id="status-bar">
+  <div id="status-dot"></div>
+  <span id="status-text">未连接</span>
+</div>
+
+<div id="messages"></div>
+
+<div id="controls">
+  <div id="input-row">
+    <input id="text-input" type="text" placeholder="输入消息..." autocomplete="off">
+    <button id="send-btn" disabled>
+      <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+    </button>
+  </div>
+
+  <button id="mic-btn">
+    <svg viewBox="0 0 24 24"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm-1 1.93c-3.94-.49-7-3.85-7-7.93H2c0 4.97 3.53 9.11 8 9.9V21h4v-3.07c4.47-.79 8-4.93 8-9.93h-2c0 4.08-3.06 7.44-7 7.93V15z"/></svg>
+  </button>
+  <span id="mic-label">按住说话</span>
+</div>
+
+<script>
+const WS_URL = `ws://${location.host}/ws/user_01`;
+const USER_ID = 'user_01';
+
+// --- WebSocket ---
+let ws = null;
+let reconnectTimer = null;
+let currentAssistantMsg = null;
+
+function setStatus(state, text) {
+  const dot = document.getElementById('status-dot');
+  const label = document.getElementById('status-text');
+  dot.className = state;
+  label.textContent = text;
+}
+
+function connect() {
+  ws = new WebSocket(WS_URL);
+
+  ws.onopen = () => {
+    setStatus('connected', '已连接');
+    document.getElementById('send-btn').disabled = false;
+    clearTimeout(reconnectTimer);
+  };
+
+  ws.onclose = () => {
+    setStatus('', '已断开，重连中…');
+    document.getElementById('send-btn').disabled = true;
+    reconnectTimer = setTimeout(connect, 2000);
+  };
+
+  ws.onerror = () => ws.close();
+
+  ws.onmessage = (e) => {
+    const data = JSON.parse(e.data);
+    if (data.type === 'start') {
+      currentAssistantMsg = appendMsg('assistant', '');
+      currentAssistantMsg.classList.add('streaming');
+    } else if (data.type === 'token') {
+      if (currentAssistantMsg) {
+        currentAssistantMsg.textContent += data.text;
+        scrollToBottom();
+        // TTS 流式朗读
+        speakToken(data.text);
+      }
+    } else if (data.type === 'done') {
+      if (currentAssistantMsg) {
+        currentAssistantMsg.classList.remove('streaming');
+        currentAssistantMsg = null;
+      }
+      flushTTS();
+    } else if (data.type === 'error') {
+      appendMsg('assistant', '⚠️ ' + data.message);
+    }
+  };
+}
+
+// --- 消息 UI ---
+function appendMsg(role, text) {
+  const el = document.createElement('div');
+  el.className = `msg ${role}`;
+  el.textContent = text;
+  document.getElementById('messages').appendChild(el);
+  scrollToBottom();
+  return el;
+}
+
+function scrollToBottom() {
+  const m = document.getElementById('messages');
+  m.scrollTop = m.scrollHeight;
+}
+
+// --- 发送 ---
+function sendText(text) {
+  if (!ws || ws.readyState !== WebSocket.OPEN || !text.trim()) return;
+  appendMsg('user', text);
+  ws.send(JSON.stringify({ text, speed_kmh: 0, duration_min: 0 }));
+}
+
+document.getElementById('send-btn').addEventListener('click', () => {
+  const input = document.getElementById('text-input');
+  sendText(input.value);
+  input.value = '';
+});
+
+document.getElementById('text-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    sendText(e.target.value);
+    e.target.value = '';
+  }
+});
+
+// --- TTS（浏览器原生）---
+let ttsBuffer = '';
+let ttsSpeaking = false;
+
+function speakToken(token) {
+  ttsBuffer += token;
+  // 遇到句子边界立即朗读，减少延迟感
+  if (/[。！？\n]/.test(token)) flushTTS();
+}
+
+function flushTTS() {
+  if (!ttsBuffer.trim()) return;
+  const utt = new SpeechSynthesisUtterance(ttsBuffer);
+  utt.lang = 'zh-CN';
+  utt.rate = 1.1;
+  speechSynthesis.speak(utt);
+  ttsBuffer = '';
+}
+
+// --- 语音输入（Web Speech API）---
+let recognition = null;
+const micBtn = document.getElementById('mic-btn');
+const micLabel = document.getElementById('mic-label');
+
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+if (SpeechRecognition) {
+  recognition = new SpeechRecognition();
+  recognition.lang = 'zh-CN';
+  recognition.continuous = false;
+  recognition.interimResults = false;
+
+  recognition.onresult = (e) => {
+    const text = e.results[0][0].transcript;
+    sendText(text);
+  };
+  recognition.onend = () => stopListening();
+  recognition.onerror = () => stopListening();
+} else {
+  micBtn.style.opacity = '0.3';
+  micLabel.textContent = '浏览器不支持语音';
+}
+
+function startListening() {
+  if (!recognition) return;
+  speechSynthesis.cancel(); // 打断正在播报的内容
+  micBtn.classList.add('active');
+  micLabel.textContent = '松开发送';
+  setStatus('listening', '正在听…');
+  recognition.start();
+}
+
+function stopListening() {
+  micBtn.classList.remove('active');
+  micLabel.textContent = '按住说话';
+  if (ws && ws.readyState === WebSocket.OPEN) setStatus('connected', '已连接');
+  try { recognition && recognition.stop(); } catch(e) {}
+}
+
+// 支持鼠标和触摸
+micBtn.addEventListener('mousedown', startListening);
+micBtn.addEventListener('mouseup', stopListening);
+micBtn.addEventListener('mouseleave', stopListening);
+micBtn.addEventListener('touchstart', (e) => { e.preventDefault(); startListening(); });
+micBtn.addEventListener('touchend', (e) => { e.preventDefault(); stopListening(); });
+
+// --- 启动 ---
+connect();
+</script>
+</body>
+</html>
